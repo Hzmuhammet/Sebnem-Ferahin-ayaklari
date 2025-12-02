@@ -1,0 +1,197 @@
+import os
+import sys
+import threading
+from tkinter import Tk, Frame, Label, Button, Canvas, StringVar, PhotoImage
+from PIL import Image, ImageTk
+
+APP_TITLE = "Şebnem Ferah'ın ayakları"
+SUPPORTED_EXT = {".jpg", ".jpeg", ".png"}
+
+def get_images_in_folder(folder):
+    files = []
+    for name in sorted(os.listdir(folder)):
+        ext = os.path.splitext(name)[1].lower()
+        if ext in SUPPORTED_EXT:
+            files.append(os.path.join(folder, name))
+    return files
+
+class ImageViewer(Frame):
+    def __init__(self, master):
+        super().__init__(master)
+        self.master = master
+        self.pack(fill="both", expand=True)
+        self.current_index = 0
+        self.zoom = 1.0
+        self.rotation = 0
+        self.current_image = None
+        self.current_photo = None
+        self.image_files = []
+        self.bar_value = 0
+
+        self._build_ui()
+        self.load_startup_folder()
+
+    def _build_ui(self):
+        self.master.title(APP_TITLE)
+        self.master.geometry("700x400")  # daha küçük pencere
+
+        # Sol panel
+        leftbar = Frame(self, width=120)
+        leftbar.pack(side="left", fill="y")
+
+        # Dudak resmi
+        try:
+            lips_img = PhotoImage(file="lips.png")  # aynı klasörde lips.png olmalı
+            lbl = Label(leftbar, image=lips_img)
+            lbl.image = lips_img
+            lbl.pack(pady=5)
+        except:
+            Label(leftbar, text="👄", font=("Arial", 20)).pack(pady=5)
+
+        # Azdın mı barı
+        Label(leftbar, text="Azdın mı?").pack(pady=5)
+        self.bar_canvas = Canvas(leftbar, width=100, height=15, bg="white")
+        self.bar_canvas.pack(pady=5)
+        self.bar_rect = self.bar_canvas.create_rectangle(0,0,0,15,fill="red")
+
+        Button(leftbar, text="Evet", command=self.increase_bar).pack(pady=2)
+        Button(leftbar, text="Hayır", command=lambda: None).pack(pady=2)
+
+        # Üst bar
+        topbar = Frame(self)
+        topbar.pack(side="top", fill="x")
+
+        Button(topbar, text="◀ Önceki", command=self.show_prev).pack(side="left", padx=2, pady=2)
+        Button(topbar, text="Sonraki ▶", command=self.show_next).pack(side="left", padx=2, pady=2)
+        Button(topbar, text="Yakınlaştır +", command=lambda: self.adjust_zoom(1.2)).pack(side="left", padx=2, pady=2)
+        Button(topbar, text="Uzaklaştır −", command=lambda: self.adjust_zoom(1/1.2)).pack(side="left", padx=2, pady=2)
+        Button(topbar, text="⟲ 90°", command=lambda: self.rotate(-90)).pack(side="left", padx=2, pady=2)
+        Button(topbar, text="⟳ 90°", command=lambda: self.rotate(90)).pack(side="left", padx=2, pady=2)
+        Button(topbar, text="Sıfırla", command=self.reset_view).pack(side="left", padx=2, pady=2)
+
+        # Görsel alan
+        self.canvas = Canvas(self, bg="#202225")
+        self.canvas.pack(side="right", fill="both", expand=True)
+
+        bottombar = Frame(self)
+        bottombar.pack(side="bottom", fill="x")
+        self.status_var = StringVar(value="Hazır")
+        self.status_label = Label(bottombar, textvariable=self.status_var, anchor="w")
+        self.status_label.pack(side="left", padx=5, pady=5)
+
+        self.canvas.bind("<Configure>", lambda e: self.redraw())
+        self.canvas.bind("<Double-Button-1>", self.show_heart)
+        self.canvas.bind("<Double-Button-3>", self.show_fire)
+
+        # Klavye kısayolları
+        self.master.bind("<Left>", lambda e: self.show_prev())
+        self.master.bind("<Right>", lambda e: self.show_next())
+        self.master.bind("<f>", lambda e: self.fit_to_window())
+
+    def load_startup_folder(self):
+        if getattr(sys, 'frozen', False):
+            folder = os.path.dirname(sys.executable)
+        else:
+            folder = os.path.dirname(os.path.abspath(__file__))
+
+        self.image_files = get_images_in_folder(folder)
+        self.current_index = 0
+        if self.image_files:
+            self.load_image()
+        else:
+            self.status_var.set("Bu klasörde hiç resim bulunamadı.")
+
+    def load_image(self):
+        if not self.image_files:
+            self.status_var.set("Resim dosyası yok.")
+            return
+        path = self.image_files[self.current_index]
+        img = Image.open(path).convert("RGBA")
+        if self.rotation % 360 != 0:
+            img = img.rotate(-self.rotation, expand=True)
+        self.current_image = img
+        self.after(100, self.fit_to_window)
+        self.status_var.set(f"Görüntü: {os.path.basename(path)} ({self.current_index+1}/{len(self.image_files)})")
+
+    def redraw(self):
+        if self.current_image is None:
+            return
+        cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
+        if cw <= 1 or ch <= 1:
+            return
+        w, h = int(self.current_image.width * self.zoom), int(self.current_image.height * self.zoom)
+        if w <= 0 or h <= 0:
+            return
+        img = self.current_image.resize((w, h), Image.Resampling.LANCZOS)
+        self.current_photo = ImageTk.PhotoImage(img)
+        self.canvas.delete("all")
+        x, y = (cw - w) // 2, (ch - h) // 2
+        self.canvas.create_image(x, y, image=self.current_photo, anchor="nw")
+
+    def adjust_zoom(self, factor):
+        self.zoom *= factor
+        self.zoom = max(0.1, min(self.zoom, 10.0))
+        self.redraw()
+        self.status_var.set(f"Yakınlaştırma: {self.zoom:.2f}x")
+
+    def rotate(self, degrees):
+        self.rotation = (self.rotation + degrees) % 360
+        self.load_image()
+        self.status_var.set(f"Döndürme: {self.rotation}°")
+
+    def fit_to_window(self):
+        if self.current_image is None:
+            return
+        cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
+        if cw <= 1 or ch <= 1:
+            self.after(100, self.fit_to_window)
+            return
+        iw, ih = self.current_image.width, self.current_image.height
+        self.zoom = min(cw / iw, ch / ih) * 0.95
+        self.redraw()
+
+    def reset_view(self):
+        self.zoom = 1.0
+        self.rotation = 0
+        self.load_image()
+        self.status_var.set("Görünüm sıfırlandı")
+
+    def show_prev(self):
+        if not self.image_files:
+            return
+        self.current_index = (self.current_index - 1) % len(self.image_files)
+        self.load_image()
+
+    def show_next(self):
+        if not self.image_files:
+            return
+        self.current_index = (self.current_index + 1) % len(self.image_files)
+        self.load_image()
+
+    def show_heart(self, event):
+        item = self.canvas.create_text(event.x, event.y, text="❤", fill="red", font=("Arial", 18, "bold"))
+        threading.Timer(1.0, lambda: self.canvas.delete(item)).start()
+
+    def show_fire(self, event):
+        item = self.canvas.create_text(event.x, event.y, text="🔥", fill="orange", font=("Arial", 18, "bold"))
+        threading.Timer(1.0, lambda: self.canvas.delete(item)).start()
+
+    def increase_bar(self):
+        self.bar_value = min(100, self.bar_value + 10)
+        self.bar_canvas.coords(self.bar_rect, 0, 0, self.bar_value, 15)
+
+class SeboAyakApp(Tk):
+    def __init__(self):
+        super().__init__()
+        try:
+            self.iconbitmap("sebo.ico")
+        except Exception as e:
+            print("İkon yüklenemedi:", e)
+        self.viewer = ImageViewer(self)
+
+def main():
+    app = SeboAyakApp()
+    app.mainloop()
+
+if __name__ == "__main__":
+    main()
